@@ -16,6 +16,7 @@ import asyncio
 import datetime
 import logging
 import os
+import shutil
 import sys
 
 import pytz
@@ -36,9 +37,9 @@ CALENDAR_IDS = [
     "family07313615549286623759@group.calendar.google.com",
 ]
 
-SESSION_DIR     = "session_data"
-SESSION_ZIP     = "session_encrypted.zip"
-SG_TZ           = pytz.timezone("Asia/Singapore")
+SESSION_DIR = "session_data"
+SESSION_ZIP = "session_encrypted.zip"
+SG_TZ       = pytz.timezone("Asia/Singapore")
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -118,12 +119,32 @@ def restore_whatsapp_session():
             f"{SESSION_ZIP} not found. Commit it to the repo after running login_exporter.py."
         )
 
-    log.info(f"Decrypting {SESSION_ZIP} -> {SESSION_DIR}/")
+    # Clean up any previous extraction
+    if os.path.exists(SESSION_DIR):
+        shutil.rmtree(SESSION_DIR)
     os.makedirs(SESSION_DIR, exist_ok=True)
+
+    log.info(f"Decrypting {SESSION_ZIP} -> {SESSION_DIR}/")
     with pyzipper.AESZipFile(SESSION_ZIP, "r") as zf:
         zf.setpassword(password.encode())
-        zf.extractall(SESSION_DIR)
+        # Extract manually to fix Windows backslash paths on Linux
+        for zip_info in zf.infolist():
+            # Normalise path separators (Windows -> Linux)
+            normalised = zip_info.filename.replace("\\", "/").replace("\\\\", "/")
+            dest = os.path.join(SESSION_DIR, normalised)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            if not normalised.endswith("/"):
+                with zf.open(zip_info) as src, open(dest, "wb") as dst:
+                    dst.write(src.read())
+                log.info(f"  Extracted: {normalised}")
+
     log.info("Session restored successfully.")
+
+    # Log what was actually extracted for debugging
+    for root, dirs, files in os.walk(SESSION_DIR):
+        for f in files:
+            p = os.path.join(root, f)
+            log.info(f"  File: {os.path.relpath(p, SESSION_DIR)}  ({os.path.getsize(p)} bytes)")
 
 
 # ---------------------------------------------------------------------------
@@ -142,46 +163,69 @@ async def send_whatsapp_message(message: str):
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--disable-extensions",
+                "--disable-gpu",
+                "--window-size=1280,800",
+                "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             ],
         )
 
         page = browser.pages[0] if browser.pages else await browser.new_page()
+
+        # Override navigator properties to avoid headless detection
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
+        """)
+
         group_url = f"https://web.whatsapp.com/accept?code={GROUP_INVITE_CODE}"
 
         try:
             log.info("Loading WhatsApp Web...")
-            await page.goto("https://web.whatsapp.com", timeout=60000)
+            await page.goto("https://web.whatsapp.com", timeout=60000, wait_until="domcontentloaded")
 
+            log.info("Waiting up to 60s for chat list (session check)...")
             try:
-                await page.wait_for_selector('[data-testid="chat-list"]', timeout=45000)
-                log.info("Session valid. Chat list loaded.")
+                # Try multiple selectors WhatsApp uses for the main UI
+                await page.wait_for_selector(
+                    '[data-testid="chat-list"], [data-testid="default-user"], #app .two',
+                    timeout=60000
+                )
+                log.info("Session valid. WhatsApp Web loaded.")
             except Exception:
                 await page.screenshot(path="debug_screenshot.png")
+                page_title = await page.title()
+                log.error(f"Page title at timeout: {page_title}")
                 raise RuntimeError(
                     "WhatsApp session invalid or expired. "
-                    "Re-run login_exporter.py locally, commit the new session_encrypted.zip, and update SESSION_PASSWORD."
+                    "Re-run login_exporter.py locally, commit the new session_encrypted.zip."
                 )
 
             log.info(f"Navigating to group: {group_url}")
-            await page.goto(group_url, timeout=30000)
+            await page.goto(group_url, timeout=30000, wait_until="domcontentloaded")
+            await asyncio.sleep(3)
 
+            log.info("Waiting for compose box...")
             await page.wait_for_selector(
                 '[data-testid="conversation-compose-box-input"]', timeout=30000
             )
-            log.info("Compose box found. Typing message...")
 
             input_box = page.locator('[data-testid="conversation-compose-box-input"]')
             await input_box.click()
+            await asyncio.sleep(1)
 
             lines = message.split("\n")
             for i, line in enumerate(lines):
-                await input_box.type(line)
+                await input_box.type(line, delay=30)
                 if i < len(lines) - 1:
                     await page.keyboard.press("Shift+Enter")
 
             await page.keyboard.press("Enter")
             log.info("Message sent!")
-            await asyncio.sleep(3)
+            await asyncio.sleep(4)
 
         except Exception as e:
             log.error(f"Failed to send message: {e}")
