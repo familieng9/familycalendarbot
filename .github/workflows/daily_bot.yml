@@ -1,0 +1,83 @@
+name: Daily Family Calendar Bot
+
+on:
+  schedule:
+    # 11:58 UTC = 19:58 SGT (UTC+8)
+    - cron: "58 11 * * *"
+  workflow_dispatch:   # Allow manual trigger for testing
+
+jobs:
+  send-daily-schedule:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ----------------------------------------------------------------
+      # 1. Check out the repository
+      # ----------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ----------------------------------------------------------------
+      # 2. Set up Python
+      # ----------------------------------------------------------------
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # ----------------------------------------------------------------
+      # 3. Install system dependencies required by Playwright / Chromium
+      # ----------------------------------------------------------------
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+            libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
+            libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+            libasound2t64 libpango-1.0-0 libcairo2 \
+            fonts-liberation libappindicator3-1 xdg-utils \
+            libx11-xcb1 libxcb-dri3-0
+
+      # ----------------------------------------------------------------
+      # 4. Install Python packages
+      # ----------------------------------------------------------------
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            playwright \
+            playwright-stealth \
+            google-auth \
+            google-auth-oauthlib \
+            google-auth-httplib2 \
+            google-api-python-client \
+            pytz
+
+      # ----------------------------------------------------------------
+      # 5. Install Playwright Chromium browser
+      # ----------------------------------------------------------------
+      - name: Install Playwright Chromium
+        run: playwright install chromium
+
+      # ----------------------------------------------------------------
+      # 6. Run the bot
+      # ----------------------------------------------------------------
+      - name: Run Family Calendar Bot
+        env:
+          WHATSAPP_SESSION: ${{ secrets.WHATSAPP_SESSION }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GOOGLE_TOKEN: ${{ secrets.GOOGLE_TOKEN }}
+        run: python family_bot_cloud.py
+
+      # ----------------------------------------------------------------
+      # 7. Upload debug screenshot on failure
+      # ----------------------------------------------------------------
+      - name: Upload debug screenshot (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshot
+          path: debug_screenshot.png
+          if-no-files-found: ignore
