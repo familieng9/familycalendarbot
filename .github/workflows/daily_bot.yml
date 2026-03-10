@@ -4,7 +4,7 @@ on:
   schedule:
     # 11:58 UTC = 19:58 SGT (UTC+8)
     - cron: "58 11 * * *"
-  workflow_dispatch:   # Allow manual trigger for testing
+  workflow_dispatch:
 
 jobs:
   send-daily-schedule:
@@ -12,23 +12,14 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      # ----------------------------------------------------------------
-      # 1. Check out the repository (includes session_encrypted.zip)
-      # ----------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ----------------------------------------------------------------
-      # 2. Set up Python
-      # ----------------------------------------------------------------
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # ----------------------------------------------------------------
-      # 3. Install system dependencies required by Playwright / Chromium
-      # ----------------------------------------------------------------
       - name: Install system dependencies
         run: |
           sudo apt-get update -y
@@ -40,9 +31,6 @@ jobs:
             fonts-liberation libappindicator3-1 xdg-utils \
             libx11-xcb1 libxcb-dri3-0
 
-      # ----------------------------------------------------------------
-      # 4. Install Python packages
-      # ----------------------------------------------------------------
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
@@ -56,15 +44,9 @@ jobs:
             google-api-python-client \
             pytz
 
-      # ----------------------------------------------------------------
-      # 5. Install Playwright Chromium browser
-      # ----------------------------------------------------------------
       - name: Install Playwright Chromium
         run: playwright install chromium
 
-      # ----------------------------------------------------------------
-      # 6. Run the bot
-      # ----------------------------------------------------------------
       - name: Run Family Calendar Bot
         env:
           SESSION_PASSWORD: ${{ secrets.SESSION_PASSWORD }}
@@ -72,13 +54,11 @@ jobs:
           GOOGLE_TOKEN: ${{ secrets.GOOGLE_TOKEN }}
         run: python family_bot_cloud.py
 
-      # ----------------------------------------------------------------
-      # 7. Upload debug screenshot on failure
-      # ----------------------------------------------------------------
-      - name: Upload debug screenshot (on failure)
+      # Upload ALL debug_*.png screenshots produced during the run
+      - name: Upload debug screenshots (on failure)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-screenshot
-          path: debug_screenshot.png
+          name: debug-screenshots
+          path: debug_*.png
           if-no-files-found: ignore
