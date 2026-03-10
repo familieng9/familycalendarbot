@@ -1,0 +1,41 @@
+# -----------------------------------------------
+# SENSITIVE FILES - never commit these
+# -----------------------------------------------
+
+# Google OAuth credentials
+credentials.json
+token.json
+
+# WhatsApp session raw folder (only the encrypted zip is committed)
+session_data/
+
+# Base64 session export file (used for gh CLI upload attempts)
+session_b64.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# Logs
+*.log
+PyWhatKit_DB.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Debug screenshots (produced locally, not needed in repo)
+debug_*.png
