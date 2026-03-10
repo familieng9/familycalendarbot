@@ -135,149 +135,23 @@ def restore_whatsapp_session():
 
 
 # ---------------------------------------------------------------------------
-# WhatsApp group navigation
+# Diagnostics helper
 # ---------------------------------------------------------------------------
 
-async def open_group_chat(page) -> bool:
-    """
-    Try multiple strategies to open the group and get to the compose box.
-    Strategy 1: Search bar (tries multiple known selectors)
-    Strategy 2: Scan the visible chat list for a group title match
-    Strategy 3: Navigate via invite URL and handle any dialogs
-    """
-
-    # --- Strategy 1: Search bar ---
-    search_selectors = [
-        '[data-testid="search"]',
-        '[data-testid="chat-list-search"]',
-        'div[contenteditable="true"][data-tab="3"]',
-        'div[contenteditable="true"][title="Search input textbox"]',
-        'div[contenteditable="true"][data-lexical-editor="true"]',
-        'span[data-icon="search"]',
-    ]
-
-    log.info("Strategy 1: trying search bar...")
-    for sel in search_selectors:
-        try:
-            el = page.locator(sel).first
-            if await el.is_visible(timeout=3000):
-                await el.click()
-                await asyncio.sleep(0.5)
-                # After clicking a search icon, look for the actual input
-                try:
-                    inp = page.locator(
-                        'div[contenteditable="true"][data-tab="3"], '
-                        '[data-testid="search-input"], '
-                        'div[contenteditable="true"][role="textbox"]'
-                    ).first
-                    await inp.wait_for(timeout=3000)
-                    await inp.type("Family", delay=50)
-                except Exception:
-                    await el.type("Family", delay=50)
-                await asyncio.sleep(2)
-
-                # Click the first chat result
-                result_selectors = [
-                    '[data-testid="cell-frame-container"]',
-                    '[data-testid="chat-list-item"]',
-                    '#pane-side [role="listitem"]',
-                    '#pane-side [tabindex="-1"]',
-                ]
-                for rsel in result_selectors:
-                    try:
-                        first = page.locator(rsel).first
-                        if await first.is_visible(timeout=3000):
-                            await first.click()
-                            await asyncio.sleep(1)
-                            compose = page.locator('[data-testid="conversation-compose-box-input"]')
-                            await compose.wait_for(timeout=10000)
-                            log.info(f"Search strategy succeeded with selectors: {sel} + {rsel}")
-                            return True
-                    except Exception:
-                        continue
-
-                # Clear search if nothing worked
-                await page.keyboard.press("Escape")
-                await asyncio.sleep(0.5)
-                break
-        except Exception:
-            continue
-
-    # --- Strategy 2: Scan sidebar for group name ---
-    log.info("Strategy 2: scanning sidebar chat list...")
-    group_name_candidates = ["Family", "家", "Fam"]
-    sidebar_selectors = [
-        '[data-testid="cell-frame-container"]',
-        '#pane-side [role="listitem"]',
-        '#pane-side [tabindex="-1"]',
-    ]
-    for rsel in sidebar_selectors:
-        try:
-            items = page.locator(rsel)
-            count = await items.count()
-            log.info(f"  Found {count} items with selector: {rsel}")
-            for i in range(min(count, 20)):
-                item = items.nth(i)
-                text = await item.inner_text()
-                log.info(f"  Chat [{i}]: {text[:60].strip()}")
-                for name in group_name_candidates:
-                    if name.lower() in text.lower():
-                        await item.click()
-                        await asyncio.sleep(1)
-                        compose = page.locator('[data-testid="conversation-compose-box-input"]')
-                        await compose.wait_for(timeout=10000)
-                        log.info(f"Found group via sidebar scan: {text[:40]}")
-                        return True
-        except Exception as e:
-            log.info(f"  Sidebar scan error: {e}")
-            continue
-
-    # --- Strategy 3: Invite URL with dialog handling ---
-    log.info("Strategy 3: trying invite URL with dialog handling...")
-    group_url = f"https://web.whatsapp.com/accept?code={GROUP_INVITE_CODE}"
-    await page.goto(group_url, timeout=30000, wait_until="domcontentloaded")
-    await asyncio.sleep(3)
-
-    # Log all visible buttons/links for debugging
+async def dump_page_state(page, label: str):
+    path = f"debug_{label}.png"
+    await page.screenshot(path=path, full_page=True)
+    log.info(f"Screenshot saved: {path}")
     try:
-        btns = page.locator("button, a")
-        btn_count = await btns.count()
-        for i in range(min(btn_count, 10)):
-            btn = btns.nth(i)
-            txt = await btn.inner_text()
-            log.info(f"  Button/link [{i}]: '{txt.strip()}'")
-    except Exception:
-        pass
-
-    # Try clicking any "continue" or "open" button
-    dialog_selectors = [
-        'button:has-text("Continue")',
-        'button:has-text("Open")',
-        'button:has-text("Join")',
-        'a:has-text("Continue")',
-        '[data-testid="popup-controls-ok"]',
-        '[data-testid="join-btn"]',
-    ]
-    for sel in dialog_selectors:
-        try:
-            btn = page.locator(sel).first
-            if await btn.is_visible(timeout=2000):
-                log.info(f"Clicking dialog button: {sel}")
-                await btn.click()
-                await asyncio.sleep(3)
-                break
-        except Exception:
-            continue
-
-    try:
-        compose = page.locator('[data-testid="conversation-compose-box-input"]')
-        await compose.wait_for(timeout=15000)
-        log.info("Strategy 3 (invite URL) succeeded.")
-        return True
+        testids = await page.evaluate("""
+            () => [...document.querySelectorAll('[data-testid]')]
+                .map(el => el.getAttribute('data-testid'))
+                .filter((v,i,a) => a.indexOf(v) === i)
+                .slice(0, 50)
+        """)
+        log.info(f"data-testid values on page: {testids}")
     except Exception as e:
-        log.error(f"Strategy 3 failed: {e}")
-        await page.screenshot(path="debug_screenshot.png")
-        return False
+        log.info(f"Could not enumerate testids: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +172,7 @@ async def send_whatsapp_message(message: str):
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--disable-gpu",
-                "--window-size=1280,800",
+                "--window-size=1920,1080",
                 "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             ],
         )
@@ -315,40 +189,88 @@ async def send_whatsapp_message(message: str):
             log.info("Loading WhatsApp Web...")
             await page.goto("https://web.whatsapp.com", timeout=60000, wait_until="domcontentloaded")
 
-            log.info("Waiting for chat list (up to 60s)...")
+            # Wait for the full WhatsApp UI including the sidebar chat list
+            log.info("Waiting for WhatsApp sidebar (up to 90s)...")
             try:
-                await page.wait_for_selector(
-                    '[data-testid="chat-list"], [data-testid="default-user"], #app .two',
-                    timeout=60000
-                )
-                log.info("Session valid. Chat list loaded.")
+                await page.wait_for_selector('[data-testid="chat-list"]', timeout=90000)
+                log.info("Chat list loaded.")
             except Exception:
-                await page.screenshot(path="debug_screenshot.png")
-                raise RuntimeError(
-                    "WhatsApp session invalid or expired. "
-                    "Re-run login_exporter.py and recommit session_encrypted.zip."
-                )
+                await dump_page_state(page, "01_no_chatlist")
+                raise RuntimeError("WhatsApp session invalid. Re-run login_exporter.py and recommit session_encrypted.zip.")
 
-            # Log page title and URL for debugging
-            log.info(f"Page URL: {page.url}")
-            log.info(f"Page title: {await page.title()}")
-            await asyncio.sleep(2)
+            # Give the sidebar extra time to fully populate with chats
+            log.info("Waiting 8s for sidebar chats to populate...")
+            await asyncio.sleep(8)
+            await dump_page_state(page, "02_after_load")
 
-            # Open the group
-            if not await open_group_chat(page):
-                raise RuntimeError("All strategies to open WhatsApp group failed. Check debug_screenshot.png artifact.")
+            # --- Navigate to group via invite URL ---
+            group_url = f"https://web.whatsapp.com/accept?code={GROUP_INVITE_CODE}"
+            log.info(f"Navigating to: {group_url}")
+            await page.goto(group_url, timeout=30000, wait_until="domcontentloaded")
+            await asyncio.sleep(5)
+            await dump_page_state(page, "03_after_invite")
 
-            # Send the message
-            input_box = page.locator('[data-testid="conversation-compose-box-input"]')
-            await input_box.click()
+            # Check if compose box appeared directly
+            compose = page.locator('[data-testid="conversation-compose-box-input"]')
+            compose_visible = await compose.is_visible(timeout=2000)
+
+            if not compose_visible:
+                log.info("Compose box not visible. Looking for any clickable action...")
+
+                # Log all button texts
+                btns = page.locator("button")
+                n = await btns.count()
+                log.info(f"Found {n} buttons on page:")
+                for i in range(min(n, 20)):
+                    txt = (await btns.nth(i).inner_text()).strip()
+                    log.info(f"  Button [{i}]: '{txt}'")
+
+                # Try clicking a join/continue/open button
+                for btn_text in ["Continue to WhatsApp", "Continue", "Open", "Join Group", "Join", "OK"]:
+                    try:
+                        btn = page.get_by_role("button", name=btn_text, exact=False)
+                        if await btn.is_visible(timeout=1500):
+                            log.info(f"Clicking button: '{btn_text}'")
+                            await btn.click()
+                            await asyncio.sleep(4)
+                            break
+                    except Exception:
+                        pass
+
+                await dump_page_state(page, "04_after_button_click")
+
+                # Last resort: go back to main page and use keyboard shortcut Ctrl+K (new chat search)
+                compose_visible = await compose.is_visible(timeout=3000)
+                if not compose_visible:
+                    log.info("Still no compose. Going back to main page and using Ctrl+K search...")
+                    await page.goto("https://web.whatsapp.com", timeout=30000, wait_until="domcontentloaded")
+                    await asyncio.sleep(5)
+                    # Ctrl+K or Ctrl+/ opens the search box in WhatsApp Web
+                    await page.keyboard.press("Control+k")
+                    await asyncio.sleep(1)
+                    await page.keyboard.type("Family", delay=80)
+                    await asyncio.sleep(3)
+                    await dump_page_state(page, "05_after_ctrlk_search")
+                    # Press enter on first result
+                    await page.keyboard.press("Enter")
+                    await asyncio.sleep(2)
+
+            # Final compose box check
+            try:
+                await compose.wait_for(timeout=15000)
+                log.info("Compose box ready.")
+            except Exception:
+                await dump_page_state(page, "06_no_compose_final")
+                raise RuntimeError("Could not reach compose box. Check debug screenshots in artifacts.")
+
+            # Type and send
+            await compose.click()
             await asyncio.sleep(0.5)
-
             lines = message.split("\n")
             for i, line in enumerate(lines):
-                await input_box.type(line, delay=20)
+                await compose.type(line, delay=20)
                 if i < len(lines) - 1:
                     await page.keyboard.press("Shift+Enter")
-
             await page.keyboard.press("Enter")
             log.info("Message sent successfully!")
             await asyncio.sleep(4)
