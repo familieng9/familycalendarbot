@@ -192,7 +192,10 @@ async def send_whatsapp_message(message: str):
             # Wait for the full WhatsApp UI including the sidebar chat list
             log.info("Waiting for WhatsApp sidebar (up to 90s)...")
             try:
-                await page.wait_for_selector('[data-testid="chat-list"]', timeout=90000)
+                await page.wait_for_selector(
+                    '[data-testid="chat-list"], [aria-label="Chat list"], ._aigw, #pane-side',
+                    timeout=90000
+                )
                 log.info("Chat list loaded.")
             except Exception:
                 await dump_page_state(page, "01_no_chatlist")
