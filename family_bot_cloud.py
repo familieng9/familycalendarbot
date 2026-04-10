@@ -189,7 +189,7 @@ async def send_whatsapp_message(message: str):
             log.info("Loading WhatsApp Web...")
             await page.goto("https://web.whatsapp.com", timeout=60000, wait_until="domcontentloaded")
 
-            # Wait for the full WhatsApp UI including the sidebar chat list
+            # Wait for sidebar
             log.info("Waiting for WhatsApp sidebar (up to 90s)...")
             try:
                 await page.wait_for_selector(
@@ -201,69 +201,28 @@ async def send_whatsapp_message(message: str):
                 await dump_page_state(page, "01_no_chatlist")
                 raise RuntimeError("WhatsApp session invalid. Re-run login_exporter.py and recommit session_encrypted.zip.")
 
-            # Give the sidebar extra time to fully populate with chats
-            log.info("Waiting 8s for sidebar chats to populate...")
-            await asyncio.sleep(8)
-            await dump_page_state(page, "02_after_load")
+            await asyncio.sleep(5)
 
-            # --- Navigate to group via invite URL ---
+            # Navigate to group via invite URL
             group_url = f"https://web.whatsapp.com/accept?code={GROUP_INVITE_CODE}"
             log.info(f"Navigating to: {group_url}")
             await page.goto(group_url, timeout=30000, wait_until="domcontentloaded")
             await asyncio.sleep(5)
-            await dump_page_state(page, "03_after_invite")
+            await dump_page_state(page, "02_after_invite")
 
-            # Check if compose box appeared directly
-            compose = page.locator('[data-testid="conversation-compose-box-input"]')
-            compose_visible = await compose.is_visible(timeout=2000)
+            # Find compose box - try multiple selectors used by WhatsApp Web
+            compose_selector = (
+                'div[contenteditable="true"][data-tab="10"], '
+                'footer div[contenteditable="true"], '
+                '[data-testid="conversation-compose-box-input"]'
+            )
 
-            if not compose_visible:
-                log.info("Compose box not visible. Looking for any clickable action...")
-
-                # Log all button texts
-                btns = page.locator("button")
-                n = await btns.count()
-                log.info(f"Found {n} buttons on page:")
-                for i in range(min(n, 20)):
-                    txt = (await btns.nth(i).inner_text()).strip()
-                    log.info(f"  Button [{i}]: '{txt}'")
-
-                # Try clicking a join/continue/open button
-                for btn_text in ["Continue to WhatsApp", "Continue", "Open", "Join Group", "Join", "OK"]:
-                    try:
-                        btn = page.get_by_role("button", name=btn_text, exact=False)
-                        if await btn.is_visible(timeout=1500):
-                            log.info(f"Clicking button: '{btn_text}'")
-                            await btn.click()
-                            await asyncio.sleep(4)
-                            break
-                    except Exception:
-                        pass
-
-                await dump_page_state(page, "04_after_button_click")
-
-                # Last resort: go back to main page and use keyboard shortcut Ctrl+K (new chat search)
-                compose_visible = await compose.is_visible(timeout=3000)
-                if not compose_visible:
-                    log.info("Still no compose. Going back to main page and using Ctrl+K search...")
-                    await page.goto("https://web.whatsapp.com", timeout=30000, wait_until="domcontentloaded")
-                    await asyncio.sleep(5)
-                    # Ctrl+K or Ctrl+/ opens the search box in WhatsApp Web
-                    await page.keyboard.press("Control+k")
-                    await asyncio.sleep(1)
-                    await page.keyboard.type("Family", delay=80)
-                    await asyncio.sleep(3)
-                    await dump_page_state(page, "05_after_ctrlk_search")
-                    # Press enter on first result
-                    await page.keyboard.press("Enter")
-                    await asyncio.sleep(2)
-
-            # Final compose box check
             try:
-                await compose.wait_for(timeout=15000)
+                await page.wait_for_selector(compose_selector, timeout=15000)
+                compose = page.locator(compose_selector).first
                 log.info("Compose box ready.")
             except Exception:
-                await dump_page_state(page, "06_no_compose_final")
+                await dump_page_state(page, "03_no_compose")
                 raise RuntimeError("Could not reach compose box. Check debug screenshots in artifacts.")
 
             # Type and send
