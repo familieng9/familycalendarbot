@@ -1,0 +1,56 @@
+name: Weekly SG Kids Activities Bot
+
+on:
+  schedule:
+    # Every Thursday at 09:00 UTC = 17:00 SGT (UTC+8)
+    - cron: "0 9 * * 4"
+  workflow_dispatch:
+
+jobs:
+  post-kids-activities:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+            libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
+            libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+            libasound2t64 libpango-1.0-0 libcairo2 \
+            fonts-liberation libappindicator3-1 xdg-utils \
+            libx11-xcb1 libxcb-dri3-0
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            playwright \
+            pyzipper \
+            pytz
+
+      - name: Install Playwright Chromium
+        run: playwright install chromium
+
+      - name: Run Kids Activities Bot
+        env:
+          SESSION_PASSWORD: ${{ secrets.SESSION_PASSWORD }}
+        run: python kids_activities_bot.py
+
+      - name: Upload debug screenshots (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: kids-debug-screenshots
+          path: debug_*.png
+          if-no-files-found: ignore
