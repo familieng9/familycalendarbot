@@ -53,11 +53,17 @@ async def capture_session():
         await page.goto("https://web.whatsapp.com", timeout=60000)
 
         print("\n[ACTION REQUIRED] Scan the QR code in the browser window.")
-        print("Once your chats are visible, come back here and press ENTER.")
+        print("Once your chats are fully visible (you can see and scroll chats), press ENTER.")
         input()
+
+        print("[*] Waiting 10s for Chromium to flush session to disk...")
+        await asyncio.sleep(10)
 
         print("[*] Closing browser...")
         await browser.close()
+
+        print("[*] Waiting 3s after close for OS to finish writing files...")
+        await asyncio.sleep(3)
 
 
 def encrypt_session(password: str):
