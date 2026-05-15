@@ -1,0 +1,43 @@
+# Place this file at: .github/workflows/meal_plan_weekly.yml
+# in the familieng9/familycalendarbot repo.
+
+name: Weekly Meal Plan Bot
+
+on:
+  schedule:
+    # Saturday 09:00 SGT = Saturday 01:00 UTC
+    - cron: '0 1 * * 6'
+  workflow_dispatch:
+
+jobs:
+  send-meal-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        # Same packages as family_bot_cloud.py — no new deps needed
+        run: pip install playwright pyzipper pytz
+
+      - name: Install Playwright browsers
+        run: playwright install chromium
+
+      - name: Send weekly meal plan
+        env:
+          SESSION_PASSWORD: ${{ secrets.SESSION_PASSWORD }}
+        run: python meal_plan_bot.py
+
+      - name: Upload debug screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: debug-screenshots-mealplan
+          path: debug_*.png
