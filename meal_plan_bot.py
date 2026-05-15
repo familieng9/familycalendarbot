@@ -94,7 +94,7 @@ MEAL_PLANS = {
             "lunch":      "Chicken karaage rice bowl + shredded cabbage",
             "lunch_url":  "https://www.justonecookbook.com/chicken-karaage/",
             "dinner":     "Cold soba noodles with dashi dipping sauce & egg",
-            "dinner_url": "https://www.justonecookbook.com/cold-soba-noodles/",
+            "dinner_url": "https://www.justonecookbook.com/zaru-soba/",
             "snack1": "Plain salt onigiri",
             "snack2": "Mandarin orange + graham crackers",
         },
@@ -134,9 +134,9 @@ MEAL_PLANS = {
         },
         "Wed": {
             "lunch":      "Chahan (fried rice) with chicken, egg & peas",
-            "lunch_url":  "https://www.justonecookbook.com/chahan-japanese-fried-rice/",
+            "lunch_url":  "https://www.justonecookbook.com/japanese-fried-rice/",
             "dinner":     "Grilled mackerel + pickled daikon + miso soup + rice",
-            "dinner_url": "https://www.justonecookbook.com/saba-shioyaki/",
+            "dinner_url": "https://www.justonecookbook.com/grilled-mackerel/",
             "snack1": "Tamagoyaki + cherry tomatoes",
             "snack2": "Apple + rice crackers",
         },
@@ -160,9 +160,9 @@ MEAL_PLANS = {
     3: {
         "Mon": {
             "lunch":      "Chicken soboro don (minced chicken on rice)",
-            "lunch_url":  "https://www.justonecookbook.com/soboro-don/",
+            "lunch_url":  "https://www.justonecookbook.com/soboro/",
             "dinner":     "Bok choy & tofu clear soup + miso-glazed chicken + rice",
-            "dinner_url": "https://www.justonecookbook.com/miso-glazed-chicken/",
+            "dinner_url": "https://www.justonecookbook.com/miso-chicken/",
             "snack1": "Cucumber sticks + hummus",
             "snack2": "Banana + rice crackers",
         },
@@ -202,15 +202,15 @@ MEAL_PLANS = {
     4: {
         "Mon": {
             "lunch":      "Prawn & avocado rice bowl with sesame soy dressing",
-            "lunch_url":  "https://www.justonecookbook.com/japanese-shrimp/",
+            "lunch_url":  "https://www.justonecookbook.com/ebi-chili/",
             "dinner":     "Pork mince & silken tofu stir-fry (mild) + rice + miso soup",
-            "dinner_url": "https://www.justonecookbook.com/mabo-tofu/",
+            "dinner_url": "https://www.justonecookbook.com/mapo-tofu/",
             "snack1": "Apple slices + cheddar",
             "snack2": "Rice crackers + hummus",
         },
         "Tue": {
             "lunch":      "Cold soba with prawn & cucumber in sesame sauce",
-            "lunch_url":  "https://www.justonecookbook.com/cold-soba-noodles/",
+            "lunch_url":  "https://www.justonecookbook.com/zaru-soba/",
             "dinner":     "Pan-fried pork & cabbage gyoza + steamed rice",
             "dinner_url": "https://www.justonecookbook.com/gyoza/",
             "snack1": "Cucumber sticks + cream cheese",
@@ -218,9 +218,9 @@ MEAL_PLANS = {
         },
         "Wed": {
             "lunch":      "Chahan (fried rice) with egg, peas & carrot",
-            "lunch_url":  "https://www.justonecookbook.com/chahan-japanese-fried-rice/",
+            "lunch_url":  "https://www.justonecookbook.com/japanese-fried-rice/",
             "dinner":     "Pork mince soboro don + miso soup",
-            "dinner_url": "https://www.justonecookbook.com/soboro-don/",
+            "dinner_url": "https://www.justonecookbook.com/soboro/",
             "snack1": "Plain salt onigiri",
             "snack2": "Mandarin orange + cheese",
         },
