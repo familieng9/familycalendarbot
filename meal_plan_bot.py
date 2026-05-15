@@ -1,28 +1,25 @@
 #!/usr/bin/env python3
 """
 meal_plan_bot.py — Weekly Japanese Family Meal Plan Bot
-Sends a 7-day meal plan + FairPrice grocery list every Saturday via WhatsApp.
+Sends a Mon–Fri meal plan + FairPrice grocery list every Saturday via WhatsApp.
 
 Design:
+  - Mon–Fri only (no weekend meals)
+  - Recipe URL shown below every lunch and dinner
+  - Grocery quantities sized for 4 (2 adults + 2 children aged 5 & 7)
   - 4-week rotation (ISO week % 4) — never the same two weeks in a row
-  - Each week has a "hero protein" + "hero veg" shared across 2-3 meals (less waste)
-  - Recipe of the Week scraped from Just One Cookbook via urllib (no AI API needed)
-  - Reuses the same session_encrypted.zip + launch_persistent_context pattern
-    as family_bot_cloud.py (Chromium user-data-dir, not storage_state JSON)
+  - Hero protein + hero veg reused across multiple meals each week (less waste)
+  - Reuses same session_encrypted.zip + launch_persistent_context as family_bot_cloud.py
 
 Required GitHub Secrets:
-  SESSION_PASSWORD : Decrypts session_encrypted.zip (same secret as family_bot_cloud.py)
+  SESSION_PASSWORD : Decrypts session_encrypted.zip
 """
 
 import asyncio
-import datetime
 import logging
 import os
-import re
 import shutil
 import sys
-import urllib.error
-import urllib.request
 from datetime import date, timedelta
 
 import pytz
@@ -39,243 +36,236 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-SG_TZ            = pytz.timezone("Asia/Singapore")
-SESSION_DIR      = "session_data"
-SESSION_ZIP      = "session_encrypted.zip"
-GROUP_INVITE_CODE = "FHQ7HrFjHEOJQ3fbnl84UC"   # same group as family_bot_cloud.py
-DAYS             = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+SG_TZ             = pytz.timezone("Asia/Singapore")
+SESSION_DIR       = "session_data"
+SESSION_ZIP       = "session_encrypted.zip"
+GROUP_INVITE_CODE = "FHQ7HrFjHEOJQ3fbnl84UC"
+DAYS              = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
 # ─── 4-WEEK ROTATION ─────────────────────────────────────────────────────────
+# Serves 4 — 2 adults + 2 children (ages 5 & 7).
+# Hero proteins and veg are reused across multiple meals so you buy once.
 #
-# Each week clusters ingredients to reduce waste.  Quantities in the grocery
-# list already cover every meal that shares the same item.
+# WEEK 1 — Salmon + Chicken / Cabbage + Cucumber
+#   Salmon 500g  → Mon dinner (300g) + Fri lunch ochazuke (200g)
+#   Chicken 1kg  → Mon lunch, Wed lunch, Thu lunch + dinner, Fri dinner
+#   Cucumber 2pc → Tue sunomono + Tue snack
+#   Cabbage ½    → Wed karaage garnish + Fri udon
+#   Mushrooms    → Thu nabe only
 #
-# WEEK 1 — Salmon + Chicken / Cabbage + Cucumber + Mushrooms
-#   Salmon 400g  → Mon dinner + Fri lunch
-#   Chicken 800g → Mon lunch, Wed lunch, Thu curry, Fri dinner, Sun katsu
-#   Cabbage 1/2  → Wed garnish + Fri udon
-#   Cucumber 3pc → Tue sunomono + Tue snack + Sat maki
-#   Mushrooms x2 → Thu nabe + Sat sukiyaki
-#   Tofu x2      → Mon miso + Thu nabe + Sat sukiyaki
-#
-# WEEK 2 — Pork belly + Chicken / Spinach + Mushrooms
-#   Pork belly 500g → Fri chashu ramen + Sat shabu-shabu
-#   Chicken 400g    → Mon oyakodon + Wed chahan + Sun curry udon
+# WEEK 2 — Pork belly + Chicken / Spinach + Daikon
+#   Pork belly 250g → Fri chashu ramen only
+#   Chicken 500g    → Mon oyakodon + Wed chahan
 #   Salmon 300g     → Mon onigiri + Fri chirashi
-#   Spinach x2      → Tue hotpot + Thu salad + Sat shabu-shabu
-#   Mushrooms x2    → Tue hotpot + Sat shabu + Sun zosui
+#   Spinach 1 bag   → Tue hotpot + Thu hambagu salad
 #
-# WEEK 3 — Beef + Chicken / Bok choy + Broccolini + Mushrooms
-#   Beef 500g      → Tue gyudon + Sat sukiyaki + Sun curry rice
+# WEEK 3 — Beef + Chicken / Bok choy + Broccolini
+#   Beef 350g      → Tue gyudon + Thu nikujaga stew
 #   Chicken 600g   → Mon soboro + Wed stir-fry + Fri teriyaki + Fri soba
-#   Salmon 300g    → Wed onigiri + Sat handrolls
-#   Bok choy x2   → Mon soup + Wed stir-fry + Sat sukiyaki
-#   Broccolini x2 → Tue side + Fri soba
-#   Mushrooms x2  → Thu udon + Thu stew + Sat sukiyaki
+#   Salmon 150g    → Wed onigiri only
+#   Bok choy 1-2   → Mon soup + Wed stir-fry
+#   Broccolini 2   → Tue side + Fri soba
 #
-# WEEK 4 — Prawn + Pork mince / Cabbage + Carrot + Cucumber
-#   Prawn 500g       → Mon bowl, Tue soba, Thu udon, Fri chirashi, Sat handrolls
-#   Pork mince 500g  → Tue gyoza + Wed soboro + Thu curry
-#   Pork belly 400g  → Sat shabu-shabu + Sun katsu
-#   Cabbage 1 head   → Tue gyoza + Fri okonomiyaki + Sat shabu
-#   Carrot 4pc       → Wed chahan + Thu curry + Sat shabu
-#   Cucumber 3pc     → Tue soba + Fri chirashi + Sat handrolls
+# WEEK 4 — Prawn + Pork mince / Cabbage + Carrot
+#   Prawn 350g      → Mon bowl + Tue soba + Thu udon + Fri chirashi
+#   Pork mince 500g → Tue gyoza + Wed soboro + Thu curry
+#   Cabbage ½ head  → Tue gyoza filling + Fri okonomiyaki
+#   Carrot 3pc      → Wed chahan + Thu curry
 
 MEAL_PLANS = {
     1: {
         "Mon": {
-            "lunch":  "Teriyaki chicken rice bowl",
-            "dinner": "Grilled salmon + miso tofu soup + steamed rice",
+            "lunch":      "Teriyaki chicken rice bowl",
+            "lunch_url":  "https://www.justonecookbook.com/chicken-teriyaki/",
+            "dinner":     "Grilled salmon + miso tofu soup + steamed rice",
+            "dinner_url": "https://www.justonecookbook.com/miso-soup/",
             "snack1": "Tuna mayo onigiri",
             "snack2": "Apple slices + cheddar cubes",
         },
         "Tue": {
-            "lunch":  "Udon soup with fish cake & soft-boiled egg",
-            "dinner": "Pan-fried gyoza + cucumber sunomono + rice",
+            "lunch":      "Udon soup with fish cake & soft-boiled egg",
+            "lunch_url":  "https://www.justonecookbook.com/udon-noodle-soup/",
+            "dinner":     "Pan-fried gyoza + cucumber sunomono + rice",
+            "dinner_url": "https://www.justonecookbook.com/gyoza/",
             "snack1": "Cucumber sticks + hummus",
             "snack2": "Banana + rice crackers",
         },
         "Wed": {
-            "lunch":  "Chicken karaage rice bowl + shredded cabbage",
-            "dinner": "Cold soba noodles with dashi dipping sauce & egg",
+            "lunch":      "Chicken karaage rice bowl + shredded cabbage",
+            "lunch_url":  "https://www.justonecookbook.com/chicken-karaage/",
+            "dinner":     "Cold soba noodles with dashi dipping sauce & egg",
+            "dinner_url": "https://www.justonecookbook.com/cold-soba-noodles/",
             "snack1": "Plain salt onigiri",
             "snack2": "Mandarin orange + graham crackers",
         },
         "Thu": {
-            "lunch":  "Mild Japanese chicken curry rice",
-            "dinner": "Mushroom & tofu nabe hotpot (mild) + rice",
+            "lunch":      "Mild Japanese chicken curry rice",
+            "lunch_url":  "https://www.justonecookbook.com/japanese-curry/",
+            "dinner":     "Mushroom & tofu nabe hotpot (mild) + rice",
+            "dinner_url": "https://www.justonecookbook.com/nabe/",
             "snack1": "Tamagoyaki roll slices",
             "snack2": "Grapes + rice crackers",
         },
         "Fri": {
-            "lunch":  "Salmon ochazuke (rice + warm green tea broth)",
-            "dinner": "Yaki udon with chicken & cabbage",
+            "lunch":      "Salmon ochazuke (rice + warm green tea broth)",
+            "lunch_url":  "https://www.justonecookbook.com/ochazuke/",
+            "dinner":     "Yaki udon with chicken & cabbage",
+            "dinner_url": "https://www.justonecookbook.com/yaki-udon/",
             "snack1": "Edamame (lightly salted)",
             "snack2": "Apple + cheddar cheese slices",
-        },
-        "Sat": {
-            "lunch":  "Kappa maki & tuna maki rolls",
-            "dinner": "Mild sukiyaki (beef + mushrooms + tofu) + rice",
-            "snack1": None, "snack2": None,
-        },
-        "Sun": {
-            "lunch":  "Tamago gohan (egg on rice) + miso soup",
-            "dinner": "Chicken katsu don (mild tonkatsu sauce)",
-            "snack1": None, "snack2": None,
         },
     },
     2: {
         "Mon": {
-            "lunch":  "Salmon onigiri + cup miso soup",
-            "dinner": "Oyakodon (chicken & egg on rice)",
+            "lunch":      "Salmon onigiri + cup miso soup",
+            "lunch_url":  "https://www.justonecookbook.com/onigiri/",
+            "dinner":     "Oyakodon (chicken & egg on rice)",
+            "dinner_url": "https://www.justonecookbook.com/oyakodon/",
             "snack1": "Hard-boiled egg + rice crackers",
             "snack2": "Mandarin orange + babybel cheese",
         },
         "Tue": {
-            "lunch":  "Zaru soba (cold) with sesame dipping sauce",
-            "dinner": "Spinach & tofu miso hotpot + rice",
+            "lunch":      "Zaru soba (cold) with sesame dipping sauce",
+            "lunch_url":  "https://www.justonecookbook.com/zaru-soba/",
+            "dinner":     "Spinach & tofu miso hotpot + rice",
+            "dinner_url": "https://www.justonecookbook.com/nabe/",
             "snack1": "Carrot sticks + cream cheese",
             "snack2": "Banana + graham crackers",
         },
         "Wed": {
-            "lunch":  "Chahan (fried rice) with chicken, egg & peas",
-            "dinner": "Grilled mackerel + pickled daikon + miso soup + rice",
+            "lunch":      "Chahan (fried rice) with chicken, egg & peas",
+            "lunch_url":  "https://www.justonecookbook.com/chahan-japanese-fried-rice/",
+            "dinner":     "Grilled mackerel + pickled daikon + miso soup + rice",
+            "dinner_url": "https://www.justonecookbook.com/saba-shioyaki/",
             "snack1": "Tamagoyaki + cherry tomatoes",
             "snack2": "Apple + rice crackers",
         },
         "Thu": {
-            "lunch":  "Udon soup with wakame seaweed & fish cake",
-            "dinner": "Hambagu (Japanese hamburger steak) + spinach salad + rice",
+            "lunch":      "Udon soup with wakame seaweed & fish cake",
+            "lunch_url":  "https://www.justonecookbook.com/udon-noodle-soup/",
+            "dinner":     "Hambagu (Japanese hamburger steak) + spinach salad + rice",
+            "dinner_url": "https://www.justonecookbook.com/hamburger-steak/",
             "snack1": "Edamame (lightly salted)",
             "snack2": "Grapes + cheddar cubes",
         },
         "Fri": {
-            "lunch":  "Chirashi bowl (salmon, tamagoyaki, cucumber, rice)",
-            "dinner": "Mild tonkotsu ramen with chashu pork & soft egg",
+            "lunch":      "Chirashi bowl (salmon, tamagoyaki, cucumber, rice)",
+            "lunch_url":  "https://www.justonecookbook.com/chirashi-sushi/",
+            "dinner":     "Shoyu ramen with chashu pork & soft egg (mild)",
+            "dinner_url": "https://www.justonecookbook.com/shoyu-ramen/",
             "snack1": "Tuna mayo onigiri",
             "snack2": "Apple slices + crackers",
-        },
-        "Sat": {
-            "lunch":  "Yaki onigiri (grilled rice balls) + clear soup",
-            "dinner": "Shabu-shabu (pork belly + spinach + mushrooms) with sesame sauce",
-            "snack1": None, "snack2": None,
-        },
-        "Sun": {
-            "lunch":  "Zosui (egg & mushroom rice porridge)",
-            "dinner": "Mild chicken curry udon",
-            "snack1": None, "snack2": None,
         },
     },
     3: {
         "Mon": {
-            "lunch":  "Chicken soboro don (minced chicken on rice)",
-            "dinner": "Bok choy & tofu clear soup + miso-glazed chicken thigh + rice",
+            "lunch":      "Chicken soboro don (minced chicken on rice)",
+            "lunch_url":  "https://www.justonecookbook.com/soboro-don/",
+            "dinner":     "Bok choy & tofu clear soup + miso-glazed chicken + rice",
+            "dinner_url": "https://www.justonecookbook.com/miso-glazed-chicken/",
             "snack1": "Cucumber sticks + hummus",
             "snack2": "Banana + rice crackers",
         },
         "Tue": {
-            "lunch":  "Tamagoyaki sandwich (Japanese egg roll in soft bread)",
-            "dinner": "Gyudon (mild beef rice bowl) + steamed broccolini",
+            "lunch":      "Tamagoyaki sandwich (Japanese egg roll in soft bread)",
+            "lunch_url":  "https://www.justonecookbook.com/tamagoyaki/",
+            "dinner":     "Gyudon (mild beef rice bowl) + steamed broccolini",
+            "dinner_url": "https://www.justonecookbook.com/gyudon/",
             "snack1": "Edamame (lightly salted)",
             "snack2": "Apple + babybel cheese",
         },
         "Wed": {
-            "lunch":  "Salmon & tuna mayo onigiri duo + miso soup",
-            "dinner": "Chicken & bok choy stir-fry + steamed rice",
+            "lunch":      "Salmon & tuna mayo onigiri duo + miso soup",
+            "lunch_url":  "https://www.justonecookbook.com/onigiri/",
+            "dinner":     "Chicken & bok choy stir-fry + steamed rice",
+            "dinner_url": "https://www.justonecookbook.com/chicken-stir-fry/",
             "snack1": "Plain salt onigiri",
             "snack2": "Mandarin orange + graham crackers",
         },
         "Thu": {
-            "lunch":  "Udon with mushrooms, egg & chicken in dashi broth",
-            "dinner": "Mild beef nikujaga (potato & beef stew) + rice",
+            "lunch":      "Udon with mushrooms, egg & chicken in dashi broth",
+            "lunch_url":  "https://www.justonecookbook.com/udon-noodle-soup/",
+            "dinner":     "Mild beef nikujaga (potato & beef stew) + rice",
+            "dinner_url": "https://www.justonecookbook.com/nikujaga/",
             "snack1": "Tamagoyaki roll slices",
             "snack2": "Grapes + cheddar cubes",
         },
         "Fri": {
-            "lunch":  "Chicken teriyaki rice bowl",
-            "dinner": "Soba noodles with chicken & broccolini in dashi broth",
+            "lunch":      "Chicken teriyaki rice bowl",
+            "lunch_url":  "https://www.justonecookbook.com/chicken-teriyaki/",
+            "dinner":     "Soba noodles with chicken & broccolini in dashi broth",
+            "dinner_url": "https://www.justonecookbook.com/soba-noodles/",
             "snack1": "Rice crackers + cheese",
             "snack2": "Apple slices + crackers",
-        },
-        "Sat": {
-            "lunch":  "Temaki handrolls (salmon, cucumber, tamagoyaki)",
-            "dinner": "Sukiyaki (beef + mushrooms + bok choy + tofu) + rice",
-            "snack1": None, "snack2": None,
-        },
-        "Sun": {
-            "lunch":  "Omurice (omelette fried rice, mild tomato-ketchup sauce)",
-            "dinner": "Mild beef curry rice",
-            "snack1": None, "snack2": None,
         },
     },
     4: {
         "Mon": {
-            "lunch":  "Prawn & avocado rice bowl with sesame soy dressing",
-            "dinner": "Pork mince & silken tofu stir-fry (mild) + rice + miso soup",
+            "lunch":      "Prawn & avocado rice bowl with sesame soy dressing",
+            "lunch_url":  "https://www.justonecookbook.com/japanese-shrimp/",
+            "dinner":     "Pork mince & silken tofu stir-fry (mild) + rice + miso soup",
+            "dinner_url": "https://www.justonecookbook.com/mabo-tofu/",
             "snack1": "Apple slices + cheddar",
             "snack2": "Rice crackers + hummus",
         },
         "Tue": {
-            "lunch":  "Cold soba with prawn & cucumber in sesame sauce",
-            "dinner": "Pan-fried pork & cabbage gyoza + steamed rice",
+            "lunch":      "Cold soba with prawn & cucumber in sesame sauce",
+            "lunch_url":  "https://www.justonecookbook.com/cold-soba-noodles/",
+            "dinner":     "Pan-fried pork & cabbage gyoza + steamed rice",
+            "dinner_url": "https://www.justonecookbook.com/gyoza/",
             "snack1": "Cucumber sticks + cream cheese",
             "snack2": "Banana + graham crackers",
         },
         "Wed": {
-            "lunch":  "Chahan (fried rice) with egg, peas & carrot",
-            "dinner": "Pork mince soboro don + miso soup",
+            "lunch":      "Chahan (fried rice) with egg, peas & carrot",
+            "lunch_url":  "https://www.justonecookbook.com/chahan-japanese-fried-rice/",
+            "dinner":     "Pork mince soboro don + miso soup",
+            "dinner_url": "https://www.justonecookbook.com/soboro-don/",
             "snack1": "Plain salt onigiri",
             "snack2": "Mandarin orange + cheese",
         },
         "Thu": {
-            "lunch":  "Udon soup with prawn, fish cake & carrot",
-            "dinner": "Mild pork & potato Japanese curry + rice",
+            "lunch":      "Udon soup with prawn, fish cake & carrot",
+            "lunch_url":  "https://www.justonecookbook.com/udon-noodle-soup/",
+            "dinner":     "Mild pork & potato Japanese curry + rice",
+            "dinner_url": "https://www.justonecookbook.com/japanese-curry/",
             "snack1": "Tamagoyaki roll slices",
             "snack2": "Grapes + rice crackers",
         },
         "Fri": {
-            "lunch":  "Chirashi bowl (prawn, cucumber, tamagoyaki, sushi rice)",
-            "dinner": "Cabbage & carrot okonomiyaki (mild) + miso soup",
+            "lunch":      "Chirashi bowl (prawn, cucumber, tamagoyaki, sushi rice)",
+            "lunch_url":  "https://www.justonecookbook.com/chirashi-sushi/",
+            "dinner":     "Cabbage & carrot okonomiyaki (mild) + miso soup",
+            "dinner_url": "https://www.justonecookbook.com/okonomiyaki/",
             "snack1": "Edamame (lightly salted)",
             "snack2": "Apple + crackers",
-        },
-        "Sat": {
-            "lunch":  "Prawn & cucumber temaki handrolls",
-            "dinner": "Shabu-shabu (pork belly + cabbage + carrot + mushrooms) with sesame dip",
-            "snack1": None, "snack2": None,
-        },
-        "Sun": {
-            "lunch":  "Tamago gohan (egg on rice) + miso soup",
-            "dinner": "Mild pork katsu udon",
-            "snack1": None, "snack2": None,
         },
     },
 }
 
 # ─── GROCERY LISTS ───────────────────────────────────────────────────────────
-# Quantities consolidate all cross-meal shared uses so you buy once.
+# Serves 4 — 2 adults + 2 children (ages 5 & 7). Mon–Fri only.
+# Quantities cover all meals that share the same ingredient.
 
 GROCERY_LISTS = {
     1: {
         "🥦 Produce": [
-            "Cucumber x3  (Tue sunomono, Tue snack, Sat maki)",
-            "Cabbage 1/2 head  (Wed karaage garnish, Fri udon)",
-            "Green onion / negi x1 bunch",
-            "Shiitake mushrooms x1 pack  (Thu nabe, Sat sukiyaki)",
-            "Shimeji mushrooms x1 pack  (Thu nabe, Sat sukiyaki)",
+            "Cucumber x2  (Tue sunomono + Tue snack)",
+            "Cabbage ½ head  (Wed karaage garnish + Fri udon)",
+            "Green onion x1 bunch",
+            "Shiitake mushrooms x1 pack  (Thu nabe)",
             "Apples x4", "Mandarin oranges x4", "Grapes x1 bunch", "Bananas x4",
             "Frozen edamame x1 bag",
         ],
         "🥩 Meat / Seafood": [
-            "Chicken thigh fillet x800g  (Mon, Wed, Thu, Fri, Sun)",
-            "Salmon fillet x400g  (Mon dinner + Fri ochazuke)",
-            "Pork mince x300g  (Tue gyoza)",
-            "Beef sukiyaki slices x300g  (Sat sukiyaki)",
+            "Chicken thigh fillet x1kg  (Mon, Wed, Thu lunch + dinner, Fri)",
+            "Salmon fillet x500g  (Mon dinner 300g + Fri ochazuke 200g)",
+            "Pork mince x400g  (Tue gyoza)",
             "Fish cake / narutomaki x1 pack  (Tue udon)",
         ],
         "🧊 Chilled": [
-            "Eggs x10  (Wed soba, Thu tamagoyaki snack, Sun tamago gohan, miso soups)",
-            "Silken tofu x2 packs  (Mon miso soup, Thu nabe, Sat sukiyaki)",
+            "Eggs x8  (Wed soba, Thu tamagoyaki snack, miso soups)",
+            "Silken tofu x1 pack  (Mon miso soup, Thu nabe)",
             "Firm tofu x1 pack  (Thu nabe)",
             "Cheddar / babybel cheese x1 pack",
             "Ready-made gyoza x1 pack  (Tue dinner)",
@@ -298,28 +288,26 @@ GROCERY_LISTS = {
     },
     2: {
         "🥦 Produce": [
-            "Spinach x2 bags  (Tue hotpot, Thu salad, Sat shabu-shabu)",
-            "Daikon x1 small  (Wed pickled, Sat side)",
+            "Spinach x1 bag  (Tue hotpot + Thu hambagu salad)",
+            "Daikon x1 small  (Wed pickled side)",
             "Carrot x2", "Cucumber x2",
             "Cherry tomatoes x1 punnet  (Wed snack)",
             "Green onion x1 bunch",
-            "Shiitake x1 pack  (Sat shabu, Sun zosui)",
-            "Shimeji x1 pack  (Sat shabu, Sun zosui)",
             "Frozen peas x1 bag  (Wed chahan)",
             "Frozen edamame x1 bag  (Thu snack)",
             "Apples x4", "Mandarin oranges x4", "Grapes x1 bunch", "Bananas x4",
         ],
         "🥩 Meat / Seafood": [
-            "Chicken thigh fillet x400g  (Mon oyakodon, Wed chahan, Sun curry udon)",
+            "Chicken thigh fillet x500g  (Mon oyakodon + Wed chahan)",
             "Salmon fillet x300g  (Mon onigiri + Fri chirashi)",
-            "Pork belly x500g  (Fri chashu ramen + Sat shabu-shabu)",
+            "Pork belly x250g  (Fri chashu ramen)",
             "Minced pork + beef mix x300g  (Thu hambagu)",
             "Mackerel fillets x2  (Wed dinner)",
             "Fish cake x1 pack  (Thu udon)",
         ],
         "🧊 Chilled": [
-            "Eggs x12  (Mon oyakodon, Wed tamagoyaki, Fri chirashi, Sun zosui)",
-            "Silken tofu x2 packs  (Tue hotpot, miso soups)",
+            "Eggs x8  (Mon oyakodon, Wed tamagoyaki, Fri chirashi)",
+            "Silken tofu x1 pack  (Tue hotpot + miso soups)",
             "Firm tofu x1 pack  (Tue hotpot)",
             "Cream cheese x1 small tub  (Tue snack)",
             "Babybel / cheddar cheese x1 pack",
@@ -333,7 +321,6 @@ GROCERY_LISTS = {
             "Soy sauce, mirin, sesame oil  (replenish if low)",
             "Dashi stock granules",
             "Kewpie sesame dressing x1 bottle",
-            "Mild tonkatsu sauce",
             "Nori sheets x1 pack",
             "Rice crackers x2 packs", "Graham crackers x1 box",
             "Sushi rice vinegar", "Canned tuna x1",
@@ -341,24 +328,24 @@ GROCERY_LISTS = {
     },
     3: {
         "🥦 Produce": [
-            "Bok choy x2 bunches  (Mon soup, Wed stir-fry, Sat sukiyaki)",
-            "Broccolini x2 bunches  (Tue side, Fri soba)",
-            "Cucumber x3  (Wed onigiri side, Sat handrolls, snacks)",
+            "Bok choy x2 bunches  (Mon soup + Wed stir-fry)",
+            "Broccolini x2 bunches  (Tue gyudon side + Fri soba)",
+            "Cucumber x2  (Wed onigiri side + snacks)",
             "Potato x3  (Thu nikujaga)",
             "Green onion x1 bunch",
-            "Shiitake x1 pack  (Thu udon, Thu stew, Sat sukiyaki)",
-            "Shimeji x1 pack  (Thu udon, Sat sukiyaki)",
+            "Shiitake x1 pack  (Thu udon + Thu stew)",
             "Frozen edamame x1 bag  (Tue snack)",
             "Apples x4", "Mandarin oranges x4", "Grapes x1 bunch", "Bananas x4",
         ],
         "🥩 Meat / Seafood": [
-            "Chicken thigh fillet x600g  (Mon soboro, Wed stir-fry, Fri teriyaki+soba)",
-            "Beef thinly sliced x500g  (Tue gyudon, Thu stew, Sat sukiyaki, Sun curry)",
-            "Salmon fillet x300g  (Wed onigiri + Sat handrolls)",
+            "Chicken thigh fillet x600g  (Mon soboro + Wed stir-fry + Fri teriyaki + Fri soba)",
+            "Beef thinly sliced x350g  (Tue gyudon + Thu nikujaga)",
+            "Salmon fillet x150g  (Wed onigiri)",
         ],
         "🧊 Chilled": [
-            "Eggs x10  (Mon soboro topping, Thu tamagoyaki, Thu udon, Sat handrolls, Sun omurice)",
-            "Silken tofu x2 packs  (Mon soup, Sat sukiyaki, miso soups)",
+            "Eggs x8  (Mon soboro topping, Thu tamagoyaki, Thu udon)",
+            "Silken tofu x1 pack  (Mon soup + miso soups)",
+            "Firm tofu x1 pack  (Mon soup)",
             "Babybel / cheddar cheese x1 pack",
             "Hummus x2 cups  (Mon snack)",
             "Cream cheese x1 small tub",
@@ -371,7 +358,7 @@ GROCERY_LISTS = {
             "Soy sauce, mirin, sesame oil  (replenish if low)",
             "Dashi stock granules",
             "Teriyaki sauce x1 bottle",
-            "Mild Japanese curry roux x1 box", "Mild tonkatsu sauce x1 bottle",
+            "Mild Japanese curry roux x1 box",
             "Nori sheets x1 pack",
             "Rice crackers x2 packs", "Graham crackers x1 box",
             "Canned tuna x2", "Sushi rice vinegar",
@@ -380,27 +367,24 @@ GROCERY_LISTS = {
     },
     4: {
         "🥦 Produce": [
-            "Cabbage x1 head  (Tue gyoza, Fri okonomiyaki, Sat shabu-shabu)",
-            "Carrot x4  (Wed chahan, Thu curry, Sat shabu-shabu)",
-            "Cucumber x3  (Tue soba, Fri chirashi, Sat handrolls)",
+            "Cabbage ½ head  (Tue gyoza filling + Fri okonomiyaki)",
+            "Carrot x3  (Wed chahan + Thu curry)",
+            "Cucumber x2  (Tue soba + Fri chirashi)",
             "Avocado x1  (Mon bowl)",
             "Potato x3  (Thu pork curry)",
             "Green onion x1 bunch",
-            "Shiitake x1 pack  (Sat shabu-shabu)",
-            "Shimeji x1 pack  (Sat shabu-shabu)",
             "Frozen peas x1 bag  (Wed chahan)",
             "Frozen edamame x1 bag  (Fri snack)",
             "Apples x4", "Mandarin oranges x4", "Grapes x1 bunch", "Bananas x4",
         ],
         "🥩 Meat / Seafood": [
-            "Prawns x500g peeled  (Mon, Tue, Thu, Fri, Sat)",
+            "Prawns x350g peeled  (Mon bowl, Tue soba, Thu udon, Fri chirashi)",
             "Pork mince x500g  (Tue gyoza, Wed soboro, Thu curry)",
-            "Pork belly / shoulder x400g  (Sat shabu-shabu, Sun katsu)",
             "Fish cake x1 pack  (Thu udon)",
         ],
         "🧊 Chilled": [
-            "Eggs x10  (Wed chahan, Thu tamagoyaki, Fri chirashi, Sun tamago gohan)",
-            "Silken tofu x2 packs  (Mon stir-fry, miso soups)",
+            "Eggs x8  (Wed chahan, Thu tamagoyaki, Fri chirashi)",
+            "Silken tofu x1 pack  (Mon stir-fry + miso soups)",
             "Cheddar / babybel cheese x1 pack",
             "Cream cheese x1 small tub  (Tue snack)",
             "Hummus x2 cups  (Mon snack)",
@@ -424,115 +408,9 @@ GROCERY_LISTS = {
     },
 }
 
-# ─── RECIPE OF THE WEEK — scraped + curated fallback ─────────────────────────
-
-# 8 curated recipes (one per slot so it takes 8 weeks to repeat even without scraping)
-CURATED_RECIPES = [
-    {
-        "name":   "Teriyaki Chicken Rice Bowl",
-        "steps":  "Pan-fry chicken thigh 5 min each side. Mix 2 tbsp soy + 1 tbsp mirin + 1 tsp sugar, pour over, glaze 1 min. Slice and serve over rice.",
-        "source": "https://www.justonecookbook.com/chicken-teriyaki/",
-    },
-    {
-        "name":   "Oyakodon (Chicken & Egg Rice Bowl)",
-        "steps":  "Simmer sliced chicken in 150ml dashi + 2 tbsp soy + 2 tbsp mirin 5 min. Pour beaten eggs over, cover 1 min until just set. Slide onto hot rice.",
-        "source": "https://www.justonecookbook.com/oyakodon/",
-    },
-    {
-        "name":   "Gyudon (Mild Beef Rice Bowl)",
-        "steps":  "Simmer thin beef + half an onion in dashi + soy + mirin + sugar 8 min. Serve over rice; top with a soft-boiled egg.",
-        "source": "https://www.justonecookbook.com/gyudon/",
-    },
-    {
-        "name":   "Prawn Chirashi Bowl",
-        "steps":  "Season rice with 2 tbsp rice vinegar + 1 tbsp sugar + 1/2 tsp salt. Top with cooked prawns, tamagoyaki strips, cucumber, nori and sesame. Done in 20 min.",
-        "source": "https://japan.recipetineats.com/chirashi-sushi/",
-    },
-    {
-        "name":   "Chicken Soboro Don",
-        "steps":  "Stir-fry minced chicken with soy + mirin + sugar 5 min until crumbly. Serve over rice with scrambled egg alongside — kids love the sweet savory combo.",
-        "source": "https://www.justonecookbook.com/soboro-don/",
-    },
-    {
-        "name":   "Hambagu (Japanese Hamburger Steak)",
-        "steps":  "Mix mince with grated onion, egg and panko. Shape into patties, pan-fry 4 min each side. Pour a quick soy + mirin + water sauce and simmer 2 min.",
-        "source": "https://www.justonecookbook.com/hamburger-steak/",
-    },
-    {
-        "name":   "Tamagoyaki (Japanese Rolled Omelette)",
-        "steps":  "Beat 3 eggs with 1 tbsp dashi + 1 tsp soy + 1 tsp mirin + 1 tsp sugar. Pour in thirds into an oiled pan, rolling each layer into a log. Slice and serve.",
-        "source": "https://www.justonecookbook.com/tamagoyaki/",
-    },
-    {
-        "name":   "Salmon & Avocado Rice Bowl",
-        "steps":  "Season hot rice with sushi vinegar. Top with pan-seared or raw salmon, sliced avocado, cucumber and nori. Drizzle with soy + sesame oil. Ready in 15 min.",
-        "source": "https://chopstickchronicles.com/salmon-bowl/",
-    },
-]
-
-# Keywords that flag a recipe as unsuitable for young children
-_SKIP_WORDS = [
-    "spicy", "chili", "chilli", "kimchi", "wasabi", "tobasco",
-    "sriracha", "curry paste", "hot sauce", "gochujang",
-]
-
-
-def scrape_justonecookbook(week_num: int) -> dict | None:
-    """Scrape Just One Cookbook's recent recipes page and pick one by week number.
-    Returns None on any error so the caller can fall back to the curated list."""
-    url = "https://www.justonecookbook.com/category/recipes/"
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; FamilyMealBot/1.0)"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-
-        # Recipe titles + URLs live in <h2 class="entry-title"><a href="...">...</a></h2>
-        pattern = (
-            r'<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>\s*'
-            r'<a\s+href="(https://www\.justonecookbook\.com/[^"]+)"[^>]*>'
-            r'([^<]+)</a>'
-        )
-        matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
-        if not matches:
-            log.info("JOC scrape: no recipe matches found in HTML.")
-            return None
-
-        safe = [
-            (url.strip(), title.strip())
-            for url, title in matches
-            if not any(kw in title.lower() for kw in _SKIP_WORDS)
-        ]
-        if not safe:
-            return None
-
-        pick_url, pick_name = safe[week_num % len(safe)]
-        log.info(f"Scraped recipe: {pick_name}")
-        return {
-            "name":   pick_name,
-            "steps":  "Tap the link for full step-by-step instructions.",
-            "source": pick_url,
-        }
-
-    except (urllib.error.URLError, Exception) as exc:
-        log.info(f"JOC scrape failed ({exc}) — will use curated recipe.")
-        return None
-
-
-def get_recipe_of_week(iso_week: int, slot: int) -> dict:
-    """Try scraping a fresh recipe; fall back to the 8-item curated list."""
-    scraped = scrape_justonecookbook(iso_week)
-    if scraped:
-        return scraped
-    # Curated list has 8 entries; use iso_week so it advances every week
-    return CURATED_RECIPES[iso_week % len(CURATED_RECIPES)]
-
-
 # ─── FORMATTERS ──────────────────────────────────────────────────────────────
 
-DAY_EMOJIS = ["🌱", "🌿", "🍃", "🌾", "🎋", "🌸", "🌺"]
+DAY_EMOJIS = ["🌱", "🌿", "🍃", "🌾", "🎋"]
 
 
 def get_week_slot(for_date: date) -> int:
@@ -540,32 +418,25 @@ def get_week_slot(for_date: date) -> int:
     return slot if slot != 0 else 4
 
 
-def format_meal_plan(slot: int, week_start: date, recipe: dict) -> str:
+def format_meal_plan(slot: int, week_start: date) -> str:
     plan     = MEAL_PLANS[slot]
-    week_end = week_start + timedelta(days=6)
+    week_end = week_start + timedelta(days=4)  # Friday
     lines = [
         f"🍱 *FAMILY MEAL PLAN — Rotation {slot}/4*",
-        f"📆 {week_start.strftime('%d %b')} – {week_end.strftime('%d %b %Y')}",
+        f"📆 {week_start.strftime('%d %b')} – {week_end.strftime('%d %b %Y')} · serves 4",
         "",
     ]
     for i, day in enumerate(DAYS):
-        day_date     = week_start + timedelta(days=i)
-        d            = plan[day]
-        is_school_day = i < 5
+        day_date = week_start + timedelta(days=i)
+        d = plan[day]
         lines.append(f"{DAY_EMOJIS[i]} *{day} {day_date.strftime('%d %b')}*")
         lines.append(f"  🥗 Lunch: {d['lunch']}")
+        lines.append(f"  🔗 {d['lunch_url']}")
         lines.append(f"  🍽 Dinner: {d['dinner']}")
-        if is_school_day:
-            lines.append(f"  🏫 Recess: {d['snack1']}")
-            lines.append(f"  🎒 Break: {d['snack2']}")
+        lines.append(f"  🔗 {d['dinner_url']}")
+        lines.append(f"  🏫 Recess: {d['snack1']}")
+        lines.append(f"  🎒 Break: {d['snack2']}")
         lines.append("")
-    lines += [
-        "─" * 26,
-        "👨‍🍳 *RECIPE OF THE WEEK*",
-        f"_{recipe['name']}_",
-        recipe["steps"],
-        f"🔗 {recipe['source']}",
-    ]
     return "\n".join(lines)
 
 
@@ -573,7 +444,7 @@ def format_grocery_list(slot: int, week_start: date) -> str:
     grocery = GROCERY_LISTS[slot]
     lines = [
         "🛒 *GROCERY LIST — FairPrice*",
-        f"Week of {week_start.strftime('%d %b')} · qty covers all shared meals",
+        f"Week of {week_start.strftime('%d %b')} · serves 4 · qty covers shared meals",
         "",
     ]
     for section, items in grocery.items():
@@ -585,7 +456,7 @@ def format_grocery_list(slot: int, week_start: date) -> str:
     return "\n".join(lines)
 
 
-# ─── SESSION RESTORE (matches family_bot_cloud.py exactly) ───────────────────
+# ─── SESSION RESTORE ─────────────────────────────────────────────────────────
 
 def restore_whatsapp_session() -> None:
     password = os.environ.get("SESSION_PASSWORD")
@@ -611,11 +482,10 @@ def restore_whatsapp_session() -> None:
     log.info("Session restored.")
 
 
-# ─── WHATSAPP SENDER (matches family_bot_cloud.py exactly) ───────────────────
+# ─── WHATSAPP SENDER ─────────────────────────────────────────────────────────
 
 async def send_whatsapp(messages: list) -> None:
     restore_whatsapp_session()
-
     group_url = f"https://web.whatsapp.com/accept?code={GROUP_INVITE_CODE}"
 
     async with async_playwright() as p:
@@ -647,6 +517,19 @@ async def send_whatsapp(messages: list) -> None:
             log.info("Loading WhatsApp Web...")
             await page.goto("https://web.whatsapp.com", timeout=60000, wait_until="domcontentloaded")
 
+            log.info("Checking for expired session...")
+            try:
+                await page.wait_for_selector('[data-testid="link-device-qr-code"]', timeout=8000)
+                await page.screenshot(path="debug_01_qr_screen.png", full_page=True)
+                raise RuntimeError(
+                    "SESSION EXPIRED — Run login_exporter.py locally, scan the QR, "
+                    "then commit the new session_encrypted.zip."
+                )
+            except RuntimeError:
+                raise
+            except Exception:
+                log.info("Session looks valid.")
+
             log.info("Waiting for chat list (up to 90s)...")
             try:
                 await page.wait_for_selector(
@@ -656,17 +539,15 @@ async def send_whatsapp(messages: list) -> None:
                 log.info("Chat list loaded.")
             except Exception:
                 await page.screenshot(path="debug_01_no_chatlist.png", full_page=True)
-                raise RuntimeError("WhatsApp session invalid — re-run login_exporter.py and recommit session_encrypted.zip.")
+                raise RuntimeError("WhatsApp session invalid — re-run login_exporter.py.")
 
             await asyncio.sleep(5)
 
-            # Navigate to the group via invite code (same as family_bot_cloud.py)
-            log.info(f"Navigating to group: {group_url}")
+            log.info("Navigating to group...")
             await page.goto(group_url, timeout=30000, wait_until="domcontentloaded")
             await asyncio.sleep(5)
             await page.screenshot(path="debug_02_group.png", full_page=True)
 
-            # Find compose box
             compose_selector = (
                 'div[contenteditable="true"][data-tab="10"], '
                 'footer div[contenteditable="true"], '
@@ -678,9 +559,8 @@ async def send_whatsapp(messages: list) -> None:
                 log.info("Compose box ready.")
             except Exception:
                 await page.screenshot(path="debug_03_no_compose.png", full_page=True)
-                raise RuntimeError("Could not reach compose box — check debug screenshots.")
+                raise RuntimeError("Could not reach compose box.")
 
-            # Send each message
             for idx, msg in enumerate(messages):
                 await compose.click()
                 await asyncio.sleep(0.5)
@@ -709,17 +589,16 @@ def main() -> None:
     log.info("=== Meal Plan Bot Starting ===")
 
     today = date.today()
-    if today.weekday() == 5:          # Saturday → plan for NEXT week
+    if today.weekday() == 5:          # Saturday → plan for next week (Mon)
         week_start = today + timedelta(days=2)
-    else:                             # any other day → current week
+    else:
         week_start = today - timedelta(days=today.weekday())
 
     iso_week = week_start.isocalendar()[1]
     slot     = get_week_slot(week_start)
     log.info(f"Today: {today} | Week start: {week_start} | ISO week: {iso_week} | Slot: {slot}/4")
 
-    recipe      = get_recipe_of_week(iso_week, slot)
-    meal_msg    = format_meal_plan(slot, week_start, recipe)
+    meal_msg    = format_meal_plan(slot, week_start)
     grocery_msg = format_grocery_list(slot, week_start)
 
     log.info("\n─── MEAL PLAN ───\n" + meal_msg)
@@ -729,7 +608,7 @@ def main() -> None:
         asyncio.run(send_whatsapp([meal_msg, grocery_msg]))
         log.info("=== Bot finished successfully ===")
     else:
-        log.info("SESSION_PASSWORD not set — dry run only, no messages sent.")
+        log.info("SESSION_PASSWORD not set — dry run only.")
 
 
 if __name__ == "__main__":
