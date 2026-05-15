@@ -1,0 +1,17 @@
+# Google OAuth — never commit these
+credentials.json
+token.json
+
+# WhatsApp session data (decrypted at runtime — raw files must stay local)
+session_data/
+
+# Debug screenshots from bot runs
+debug_*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.venv/
+venv/

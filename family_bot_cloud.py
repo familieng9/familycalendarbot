@@ -7,9 +7,11 @@ Session storage approach:
   - GOOGLE_CREDENTIALS and GOOGLE_TOKEN handle Calendar auth
 
 Required GitHub Secrets:
-  SESSION_PASSWORD   : Password used to encrypt session_encrypted.zip
-  GOOGLE_CREDENTIALS : Full contents of credentials.json
-  GOOGLE_TOKEN       : Full contents of token.json
+  SESSION_PASSWORD    : Password used to encrypt session_encrypted.zip
+  GOOGLE_CREDENTIALS  : Full contents of credentials.json
+  GOOGLE_TOKEN        : Full contents of token.json
+  WHATSAPP_GROUP_CODE : Invite code from your group link (the part after chat.whatsapp.com/invite/)
+  CALENDAR_IDS        : Comma-separated calendar IDs e.g. primary,abc123@group.calendar.google.com
 """
 
 import asyncio
@@ -26,16 +28,11 @@ from googleapiclient.discovery import build
 from playwright.async_api import async_playwright
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration — loaded from GitHub Secrets, nothing hardcoded
 # ---------------------------------------------------------------------------
 
-GROUP_INVITE_CODE = "FHQ7HrFjHEOJQ3fbnl84UC"
-
-CALENDAR_IDS = [
-    "primary",
-    "0gs624o1448ja48f0ielplj9co@group.calendar.google.com",
-    "family07313615549286623759@group.calendar.google.com",
-]
+GROUP_INVITE_CODE = os.environ.get("WHATSAPP_GROUP_CODE", "")
+CALENDAR_IDS      = [c.strip() for c in os.environ.get("CALENDAR_IDS", "primary").split(",") if c.strip()]
 
 SESSION_DIR = "session_data"
 SESSION_ZIP = "session_encrypted.zip"
@@ -159,6 +156,9 @@ async def dump_page_state(page, label: str):
 # ---------------------------------------------------------------------------
 
 async def send_whatsapp_message(message: str):
+    if not GROUP_INVITE_CODE:
+        raise EnvironmentError("WHATSAPP_GROUP_CODE secret is not set.")
+
     restore_whatsapp_session()
 
     async with async_playwright() as p:
@@ -189,6 +189,23 @@ async def send_whatsapp_message(message: str):
             log.info("Loading WhatsApp Web...")
             await page.goto("https://web.whatsapp.com", timeout=60000, wait_until="domcontentloaded")
 
+            # Fast-fail: detect QR login screen within 8s instead of waiting full 90s
+            log.info("Checking for expired session (QR screen)...")
+            try:
+                await page.wait_for_selector(
+                    '[data-testid="link-device-qr-code"]',
+                    timeout=8000
+                )
+                await dump_page_state(page, "01_qr_screen")
+                raise RuntimeError(
+                    "SESSION EXPIRED — WhatsApp is showing the QR login screen. "
+                    "Run login_exporter.py locally, scan the QR, then commit the new session_encrypted.zip."
+                )
+            except RuntimeError:
+                raise
+            except Exception:
+                log.info("QR screen not detected — session looks valid.")
+
             # Wait for sidebar
             log.info("Waiting for WhatsApp sidebar (up to 90s)...")
             try:
@@ -205,12 +222,12 @@ async def send_whatsapp_message(message: str):
 
             # Navigate to group via invite URL
             group_url = f"https://web.whatsapp.com/accept?code={GROUP_INVITE_CODE}"
-            log.info(f"Navigating to: {group_url}")
+            log.info(f"Navigating to group...")
             await page.goto(group_url, timeout=30000, wait_until="domcontentloaded")
             await asyncio.sleep(5)
             await dump_page_state(page, "02_after_invite")
 
-            # Find compose box - try multiple selectors used by WhatsApp Web
+            # Find compose box
             compose_selector = (
                 'div[contenteditable="true"][data-tab="10"], '
                 'footer div[contenteditable="true"], '
