@@ -60,8 +60,8 @@ MEAL_PLANS = {
         "Mon": {
             "lunch":      "Teriyaki chicken rice bowl",
             "lunch_url":  "https://www.justonecookbook.com/chicken-teriyaki/",
-            "dinner":     "Grilled salmon + miso tofu soup + steamed rice",
-            "dinner_url": "https://www.justonecookbook.com/miso-soup/",
+            "dinner":     "Miso-glazed salmon + soft tofu miso soup + steamed rice",
+            "dinner_url": "https://www.justonecookbook.com/miso-salmon/",
             "snack1": "Tuna mayo onigiri",
             "snack2": "Apple slices + cheddar cubes",
         },
@@ -186,7 +186,7 @@ MEAL_PLANS = {
         "Mon": {
             "lunch":      "Prawn tempura don (crispy prawn tempura on rice) + dashi dipping sauce",
             "lunch_url":  "https://www.justonecookbook.com/tempura/",
-            "dinner":     "Pork mince & silken tofu stir-fry (mild) + rice + miso soup",
+            "dinner":     "Mild Japanese mapo tofu (pork & silken tofu) + steamed rice + miso soup",
             "dinner_url": "https://www.justonecookbook.com/mapo-tofu/",
             "snack1": "Apple slices + cheddar",
             "snack2": "Rice crackers + hummus",
@@ -279,7 +279,7 @@ MEAL_PLANS = {
             "lunch":      "Udon soup with pork slices & daikon ribbons",
             "lunch_url":  "https://www.justonecookbook.com/udon-noodle-soup/",
             "dinner":     "Grilled mackerel + agedashi tofu + steamed rice",
-            "dinner_url": "https://www.justonecookbook.com/agedashi-tofu/",
+            "dinner_url": "https://www.justonecookbook.com/grilled-mackerel/",
             "snack1": "Tuna mayo onigiri",
             "snack2": "Banana + crackers",
         },
